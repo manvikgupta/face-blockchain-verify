@@ -1,0 +1,8 @@
+deepface
+web3
+python-dotenv
+requests
+py-solc-x
+tf-keras
+opencv-python
+beautifulsoup4
