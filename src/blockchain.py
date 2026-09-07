@@ -51,7 +51,8 @@ def get_contract(w3):
             "type": "event"
         }
     ]
-    return w3.eth.contract(address=config.CONTRACT_ADDRESS, abi=abi)
+    # FIXED: wrap address with Web3.to_checksum_address to resolve EIP-55 checksum error
+    return w3.eth.contract(address=Web3.to_checksum_address(config.CONTRACT_ADDRESS), abi=abi)
 
 def store_record(fingerprint_hex: str) -> int:
     w3 = get_web3()
@@ -92,6 +93,48 @@ def store_record(fingerprint_hex: str) -> int:
         # Fallback if event is not found
         count = contract.functions.recordCount().call()
         return count - 1
+
+def store_record_with_tx(fingerprint_hex: str) -> tuple:
+    w3 = get_web3()
+    contract = get_contract(w3)
+    
+    if not config.PRIVATE_KEY or config.PRIVATE_KEY == "your_private_key_without_0x_prefix":
+        raise ValueError("PRIVATE_KEY is not set or invalid in .env file.")
+
+    account = w3.eth.account.from_key(config.PRIVATE_KEY)
+    
+    # Convert hex string to bytes32
+    fingerprint_bytes = Web3.to_bytes(hexstr=fingerprint_hex)
+    
+    # Build transaction
+    tx = contract.functions.storeRecord(fingerprint_bytes).build_transaction({
+        'from': account.address,
+        'nonce': w3.eth.get_transaction_count(account.address),
+        'gas': 2000000,
+        'gasPrice': w3.eth.gas_price
+    })
+    
+    # Sign & send
+    signed_tx = w3.eth.account.sign_transaction(tx, private_key=config.PRIVATE_KEY)
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+    
+    tx_hash_hex = w3.to_hex(tx_hash)
+    
+    # Wait for receipt
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    if receipt.status != 1:
+        raise RuntimeError("Transaction failed.")
+    
+    # Parse event logs to get the newly created record ID
+    logs = contract.events.RecordStored().process_receipt(receipt)
+    if logs:
+        record_id = logs[0]['args']['id']
+    else:
+        # Fallback if event is not found
+        count = contract.functions.recordCount().call()
+        record_id = count - 1
+        
+    return record_id, tx_hash_hex
 
 def get_record(record_id: int) -> str:
     w3 = get_web3()

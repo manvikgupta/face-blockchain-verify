@@ -1,63 +1,57 @@
-import requests
 import sys
 import os
-from urllib.parse import quote
-from bs4 import BeautifulSoup
+import requests
 
-# Add parent directory to access config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
 def search_image(image_url: str):
     """
-    Performs a reverse image search using Google Images (via scrape.do as the fetch proxy).
-    `image_url` must be a PUBLICLY accessible URL to the face image
-    (e.g. a raw GitHub link to sample_data/sample_face.jpg).
+    Performs a reverse image search using SerpApi's Google Reverse Image engine.
+    `image_url` must be a PUBLICLY accessible URL to the face image.
 
-    Returns matched post details: {post_url, title, snippet, source, timestamp}.
+    Returns a list of candidate matched post details:
+    {post_url, title, snippet, source, timestamp, image_url}.
     """
-    if not config.SCRAPE_DO_API_KEY or config.SCRAPE_DO_API_KEY == "your_scrape_do_key_here":
-        raise ValueError("SCRAPE_DO_API_KEY is not set or is invalid in .env file.")
+    if not config.SERPAPI_KEY:
+        print("Search service unavailable. Please check API configuration/network connectivity.")
+        return []
 
-    # Build the Google reverse image search URL
-    google_search_url = f"https://www.google.com/searchbyimage?image_url={quote(image_url, safe='')}&safe=off"
-
-    # Route the request through scrape.do, with JS rendering enabled
-    scrape_do_endpoint = "https://api.scrape.do/"
+    endpoint = "https://serpapi.com/search.json"
     params = {
-        "token": config.SCRAPE_DO_API_KEY,
-        "url": google_search_url,
-        "render": "true"
+        "engine": "google_reverse_image",
+        "image_url": image_url,
+        "api_key": config.SERPAPI_KEY
     }
 
     try:
-        response = requests.get(scrape_do_endpoint, params=params, timeout=60)
+        response = requests.get(endpoint, params=params, timeout=60)
         response.raise_for_status()
-        html = response.text
+        data = response.json()
 
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Google's reverse image results list pages under result blocks with <a> tags
-        # linking to the matching page, and a heading/snippet nearby.
         results = []
-        for result_block in soup.select("div.g"):
-            link_tag = result_block.select_one("a")
-            title_tag = result_block.select_one("h3")
-            snippet_tag = result_block.select_one("div.VwiC3b, span.aCOpRe")
+        image_results = data.get("image_results", [])
 
-            if link_tag and title_tag:
-                results.append({
-                    "post_url": link_tag.get("href", ""),
-                    "title": title_tag.get_text(strip=True),
-                    "snippet": snippet_tag.get_text(strip=True) if snippet_tag else "",
-                    "source": link_tag.get("href", "").split("/")[2] if link_tag.get("href") else "",
-                    "timestamp": "Unknown"
-                })
+        # TEMPORARY DEBUG
+        print(f"      [debug] {len(image_results)} raw image_results returned")
+        print(f"      [debug] first 3 titles: {[m.get('title','') for m in image_results[:3]]}")
+        print(f"      [debug] first 3 links: {[m.get('link','') for m in image_results[:3]]}")
 
-        if results:
-            return results[0]  # top match
+        for match in image_results:
+            results.append({
+                "post_url": match.get("link", ""),
+                "title": match.get("title", ""),
+                "snippet": match.get("snippet", ""),
+                "source": match.get("source", ""),
+                "timestamp": "Unknown",
+                "image_url": match.get("thumbnail", "")
+            })
 
-        return None  # No results found
+        print(f"      [debug] {len(results)} candidates parsed, "
+              f"{sum(1 for r in results if r['image_url'])} have image URLs")
+
+        return results
 
     except Exception as e:
-        raise RuntimeError(f"Error during image search: {e}")
+        print(f"Search service unavailable. Please check API configuration/network connectivity. ({e})")
+        return []
